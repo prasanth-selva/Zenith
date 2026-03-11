@@ -64,9 +64,9 @@ export default function VenueSection() {
         <RevealSection delay={0.4}>
           <div className="mt-8 glass rounded-2xl overflow-hidden glow-border-cyan">
             <img
-              src="/assets/venue/campus.jpg"
+              src="/kite.jpg"
               alt="KGiSL Campus"
-              className="w-full h-48 md:h-64 object-cover"
+              className="w-full h-auto object-contain"
               loading="lazy"
             />
           </div>

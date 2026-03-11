@@ -1,39 +1,55 @@
-import { useFrameSequence } from '../../hooks/useFrameSequence';
+import { useMemo } from 'react';
+import { useFrameSequence, type FrameSequenceSegment } from '../../hooks/useFrameSequence';
 import { VIDEO1_FRAME_COUNT, VIDEO2_FRAME_COUNT } from '../../data/siteData';
 
 /**
- * Two scroll-driven frame sequences that play as the user scrolls.
- * VIDEOFRAMES1 plays across the first section range, VIDEOFRAMES2 across the second.
+ * Single seamless scroll-driven frame sequence overlay.
+ * VIDEOFRAMES1 (0-9 sec) flows directly into videoframes2 (9-15 sec)
+ * as one continuous animation on a single canvas.
+ * After frames end, the canvas fades out revealing a stunning aurora background.
  */
 export default function FrameSequenceOverlay() {
-  const { canvasRef: canvas1, loaded: loaded1 } = useFrameSequence(
-    '/VIDEOFRAMES1',
-    VIDEO1_FRAME_COUNT,
-    0,          // hero start
-    2500,       // ends after ~2500px of scroll
+  const segments: FrameSequenceSegment[] = useMemo(() => [
+    { folder: '/VIDEOFRAMES1', count: VIDEO1_FRAME_COUNT },
+    { folder: '/videoframes2', count: VIDEO2_FRAME_COUNT },
+  ], []);
+
+  const { canvasRef, loaded, progress } = useFrameSequence(
+    segments,
+    0,       // scroll begins at top
+    4500,    // total scroll distance for both sequences
   );
 
-  const { canvasRef: canvas2, loaded: loaded2 } = useFrameSequence(
-    '/VIDEOFRAMES2',
-    VIDEO2_FRAME_COUNT,
-    2500,       // starts where video1 ends
-    5000,       // ends at ~5000px
-  );
+  // Fade out frame canvas once sequence ends (progress 0.92 → 1.0)
+  const frameFadeOut = progress > 0.92 ? 1 - ((progress - 0.92) / 0.08) : 1;
+  const canvasOpacity = loaded ? Math.max(0, frameFadeOut) : 0;
+
+  // Reveal aurora background as frames fade out
+  const bgOpacity = progress > 0.85 ? Math.min(1, (progress - 0.85) / 0.15) : 0;
 
   return (
     <>
+      {/* ── Stunning animated aurora/gradient background ─────────── */}
+      <div
+        className="fixed inset-0 z-[0] pointer-events-none aurora-bg"
+        style={{ opacity: bgOpacity, transition: 'opacity 0.3s ease' }}
+      >
+        <div className="aurora-orb aurora-orb-1" />
+        <div className="aurora-orb aurora-orb-2" />
+        <div className="aurora-orb aurora-orb-3" />
+        <div className="aurora-orb aurora-orb-4" />
+        <div className="aurora-mesh" />
+      </div>
+
+      {/* ── Frame sequence canvas ────────────────────────────────── */}
       <canvas
-        ref={canvas1}
+        ref={canvasRef}
         className="frame-sequence-canvas"
-        style={{ opacity: loaded1 ? 1 : 0, transition: 'opacity 0.5s' }}
+        style={{ opacity: canvasOpacity, transition: 'opacity 0.15s ease' }}
       />
-      <canvas
-        ref={canvas2}
-        className="frame-sequence-canvas"
-        style={{ opacity: loaded2 ? 1 : 0, transition: 'opacity 0.5s' }}
-      />
-      {/* Dark overlay so text is always readable over the frames */}
-      <div className="fixed inset-0 z-[1] pointer-events-none bg-navy-900/50" />
+
+      {/* Dark overlay so text is always readable */}
+      <div className="fixed inset-0 z-[1] pointer-events-none bg-navy-900/40" />
     </>
   );
 }

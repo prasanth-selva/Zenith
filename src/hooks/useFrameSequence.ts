@@ -1,97 +1,142 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
+export interface FrameSequenceSegment {
+  folder: string;   // e.g. "/VIDEOFRAMES1"
+  count: number;     // total frames in this segment (1-indexed, zero-padded 3 digits)
+}
+
 /**
- * Scroll-driven frame sequence renderer.
- * Draws frames on a <canvas> element based on scroll position via GSAP ScrollTrigger-style manual tracking.
+ * Unified scroll-driven frame sequence renderer.
+ * Chains multiple frame-sequence folders into one seamless canvas animation.
  *
- * @param folder  - public path prefix like "/VIDEOFRAMES1"
- * @param count   - total number of frames (1-indexed, zero-padded 3 digits)
- * @param scrollStart - scroll Y where animation should begin  (px)
- * @param scrollEnd   - scroll Y where animation should end    (px)
+ * All segments are played back-to-back on a SINGLE canvas as the user scrolls
+ * from `scrollStart` to `scrollEnd`. Uses progressive loading — frames render
+ * as soon as they're available, no need to wait for all images.
  */
 export function useFrameSequence(
-  folder: string,
-  count: number,
+  segments: FrameSequenceSegment[],
   scrollStart: number,
   scrollEnd: number,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imagesRef = useRef<HTMLImageElement[]>([]);
-  const currentFrameRef = useRef(0);
+  /** Flat array of all images across every segment, in playback order */
+  const imagesRef = useRef<(HTMLImageElement | null)[]>([]);
+  const currentFrameRef = useRef(-1);
+  const rafRef = useRef(0);
   const [loaded, setLoaded] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const loadedCountRef = useRef(0);
 
-  // Preload images
+  const totalFrames = segments.reduce((acc, s) => acc + s.count, 0);
+
+  // ── Preload every image across all segments (progressive) ────────────
   useEffect(() => {
     let cancelled = false;
-    const imgs: HTMLImageElement[] = [];
-    let loadedCount = 0;
+    const allSlots: (HTMLImageElement | null)[] = new Array(totalFrames).fill(null);
+    let globalIdx = 0;
+    loadedCountRef.current = 0;
 
-    for (let i = 1; i <= count; i++) {
-      const img = new Image();
-      const num = String(i).padStart(3, '0');
-      img.src = `${folder}/ezgif-frame-${num}.jpg`;
-      img.onload = () => {
-        loadedCount++;
-        if (!cancelled && loadedCount === count) {
-          imagesRef.current = imgs;
-          setLoaded(true);
-        }
-      };
-      img.onerror = () => {
-        loadedCount++;
-        if (!cancelled && loadedCount === count) {
-          imagesRef.current = imgs;
-          setLoaded(true);
-        }
-      };
-      imgs.push(img);
+    for (const seg of segments) {
+      for (let i = 1; i <= seg.count; i++) {
+        const idx = globalIdx;
+        const img = new Image();
+        const num = String(i).padStart(3, '0');
+        img.src = `${seg.folder}/ezgif-frame-${num}.jpg`;
+
+        img.onload = () => {
+          if (cancelled) return;
+          allSlots[idx] = img;
+          imagesRef.current = allSlots;
+          loadedCountRef.current++;
+          // Mark loaded after first batch so canvas appears quickly
+          if (loadedCountRef.current >= Math.min(10, totalFrames)) {
+            setLoaded(true);
+          }
+        };
+        img.onerror = () => {
+          if (cancelled) return;
+          loadedCountRef.current++;
+          if (loadedCountRef.current >= Math.min(10, totalFrames)) {
+            setLoaded(true);
+          }
+        };
+
+        globalIdx++;
+      }
     }
 
     return () => { cancelled = true; };
-  }, [folder, count]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments.map(s => s.folder + s.count).join(',')]);
 
-  // Draw frame on scroll
+  // ── Draw a single frame (contain-fit, capped upscale) ────────────────
   const drawFrame = useCallback((index: number) => {
     const canvas = canvasRef.current;
-    if (!canvas || !imagesRef.current.length) return;
+    const images = imagesRef.current;
+    if (!canvas || !images.length) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const img = imagesRef.current[index];
-    if (!img || !img.complete || !img.naturalWidth) return;
+    // Find closest available frame if current one hasn't loaded yet
+    let img = images[index];
+    if (!img || !img.complete || !img.naturalWidth) {
+      // Search backwards for nearest loaded frame
+      for (let j = index - 1; j >= 0; j--) {
+        const candidate = images[j];
+        if (candidate && candidate.complete && candidate.naturalWidth) {
+          img = candidate;
+          break;
+        }
+      }
+      if (!img || !img.complete || !img.naturalWidth) return;
+    }
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    const cw = window.innerWidth;
+    const ch = window.innerHeight;
+    canvas.width = cw;
+    canvas.height = ch;
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
 
-    const scale = Math.max(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight);
+    // Cover-fit: stretch to fill entire viewport, crop overflow (like object-fit:cover)
+    const scale = Math.max(cw / img.naturalWidth, ch / img.naturalHeight);
     const w = img.naturalWidth * scale;
     const h = img.naturalHeight * scale;
-    const x = (canvas.width - w) / 2;
-    const y = (canvas.height - h) / 2;
+    const x = (cw - w) / 2;
+    const y = (ch - h) / 2;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, x, y, w, h);
   }, []);
 
+  // ── Scroll handler (rAF-throttled) ───────────────────────────────────
   useEffect(() => {
     if (!loaded) return;
 
     const onScroll = () => {
-      const scrollY = window.scrollY;
-      const progress = Math.min(1, Math.max(0, (scrollY - scrollStart) / (scrollEnd - scrollStart)));
-      const frameIndex = Math.min(count - 1, Math.floor(progress * (count - 1)));
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        const scrollY = window.scrollY;
+        const p = Math.min(1, Math.max(0, (scrollY - scrollStart) / (scrollEnd - scrollStart)));
+        setProgress(p);
+        const frameIndex = Math.min(totalFrames - 1, Math.floor(p * (totalFrames - 1)));
 
-      if (frameIndex !== currentFrameRef.current) {
-        currentFrameRef.current = frameIndex;
-        drawFrame(frameIndex);
-      }
+        if (frameIndex !== currentFrameRef.current) {
+          currentFrameRef.current = frameIndex;
+          drawFrame(frameIndex);
+        }
+      });
     };
 
     // Draw first frame immediately
     drawFrame(0);
     window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [loaded, scrollStart, scrollEnd, count, drawFrame]);
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [loaded, scrollStart, scrollEnd, totalFrames, drawFrame]);
 
-  return { canvasRef, loaded };
+  return { canvasRef, loaded, totalFrames, progress };
 }

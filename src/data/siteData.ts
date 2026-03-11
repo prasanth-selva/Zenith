@@ -504,5 +504,5 @@ export const TARGET_DATE = new Date('2026-03-24T08:30:00').getTime();
 export const GOOGLE_MAPS_URL =
   'https://www.google.com/maps/place/KGiSL+Institute+of+Technology/@11.0546,76.9919,17z';
 
-export const VIDEO1_FRAME_COUNT = 252;
-export const VIDEO2_FRAME_COUNT = 168;
+export const VIDEO1_FRAME_COUNT = 279;
+export const VIDEO2_FRAME_COUNT = 180;
